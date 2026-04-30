@@ -1,0 +1,20 @@
+# Database files — never commit to git
+*.db
+*.db-wal
+*.db-shm
+ipo_backtest.db
+
+# Streamlit secrets — contains API keys
+.streamlit/secrets.toml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
