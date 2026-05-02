@@ -22,9 +22,20 @@ Prompt caching:
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import date, datetime, timedelta
 from typing import Generator, Optional
+
+
+def is_configured() -> bool:
+    """Return True if ANTHROPIC_API_KEY is set in secrets or environment."""
+    try:
+        import streamlit as st
+        key = st.secrets.get("ANTHROPIC_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
+    except Exception:
+        key = os.getenv("ANTHROPIC_API_KEY", "")
+    return bool(key)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
