@@ -20,7 +20,15 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 # ── Encryption helpers (AES-256 via cryptography library) ─────────────────────
-_ENCRYPT_KEY = os.getenv("ENCRYPTION_KEY", "")  # 32-char key set in Streamlit secrets
+def _load_encryption_key() -> str:
+    """Load ENCRYPTION_KEY from st.secrets first, then os.getenv fallback."""
+    try:
+        import streamlit as st
+        return st.secrets.get("ENCRYPTION_KEY", "") or os.getenv("ENCRYPTION_KEY", "")
+    except Exception:
+        return os.getenv("ENCRYPTION_KEY", "")
+
+_ENCRYPT_KEY = _load_encryption_key()
 
 
 def _encrypt(plaintext: str) -> str:

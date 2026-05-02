@@ -42,19 +42,31 @@ with st.expander("➕ Add New Account", expanded=False):
             elif get_account(conn, acc_id):
                 st.error(f"Account ID '{acc_id}' already exists.")
             else:
-                upsert_account(conn, {
-                    "id": acc_id,
-                    "nickname": nickname,
-                    "kite_api_key": _encrypt(api_key),
-                    "kite_api_secret": _encrypt(api_secret),
-                    "kite_user_id": None,
-                    "access_token": None,
-                    "token_generated_at": None,
-                    "is_active": 1,
-                    "created_at": datetime.utcnow().isoformat(),
-                })
-                st.success(f"✅ Account '{nickname}' saved. Now log in below.")
-                st.rerun()
+                try:
+                    upsert_account(conn, {
+                        "id": acc_id,
+                        "nickname": nickname,
+                        "kite_api_key": _encrypt(api_key),
+                        "kite_api_secret": _encrypt(api_secret),
+                        "kite_user_id": None,
+                        "access_token": None,
+                        "token_generated_at": None,
+                        "is_active": 1,
+                        "created_at": datetime.utcnow().isoformat(),
+                    })
+                    st.success(f"✅ Account '{nickname}' saved. Now log in below.")
+                    st.rerun()
+                except Exception as e:
+                    err_str = str(e)
+                    if "APIError" in err_str or "RLS" in err_str.upper() or "row-level" in err_str.lower():
+                        st.error(
+                            "❌ Supabase permission error. "
+                            "Run this SQL in your Supabase dashboard → SQL Editor:\n\n"
+                            "```sql\nALTER TABLE accounts DISABLE ROW LEVEL SECURITY;\n```\n\n"
+                            f"Full error: {e}"
+                        )
+                    else:
+                        st.error(f"❌ Failed to save account: {e}")
 
 # ── Account cards ──────────────────────────────────────────────────────────────
 accounts = get_all_accounts(conn)
