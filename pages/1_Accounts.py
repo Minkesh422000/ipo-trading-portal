@@ -24,6 +24,10 @@ st.caption("Each Zerodha account needs its own Kite API key (₹500/month). Cred
 
 conn = init_db()
 
+# Track which account card has the edit form open
+if "editing_account" not in st.session_state:
+    st.session_state["editing_account"] = None
+
 # ── Add new account ────────────────────────────────────────────────────────────
 with st.expander("➕ Add New Account", expanded=False):
     with st.form("add_account_form"):
@@ -91,11 +95,62 @@ for acc in accounts:
         if acc.get("token_generated_at"):
             h_col2.caption(f"Last login: {acc['token_generated_at'][:19]} UTC")
 
-        # Delete button
-        if h_col3.button("🗑️ Remove", key=f"del_{acc['id']}"):
+        # Edit / Remove buttons
+        btn_col1, btn_col2 = h_col3.columns(2)
+        if btn_col1.button("✏️", key=f"edit_btn_{acc['id']}", help="Edit account"):
+            st.session_state["editing_account"] = (
+                None if st.session_state["editing_account"] == acc["id"] else acc["id"]
+            )
+            st.rerun()
+        if btn_col2.button("🗑️", key=f"del_{acc['id']}", help="Remove account"):
             delete_account(conn, acc["id"])
             st.success(f"Account '{acc['nickname']}' removed.")
+            st.session_state["editing_account"] = None
             st.rerun()
+
+        # ── Inline edit form ───────────────────────────────────────────────────
+        if st.session_state["editing_account"] == acc["id"]:
+            with st.form(f"edit_form_{acc['id']}"):
+                st.markdown("**✏️ Edit Account**")
+                new_nickname = st.text_input("Nickname", value=acc["nickname"])
+                new_api_key = st.text_input(
+                    "Kite API Key", type="password",
+                    placeholder="Leave blank to keep existing"
+                )
+                new_api_secret = st.text_input(
+                    "Kite API Secret", type="password",
+                    placeholder="Leave blank to keep existing"
+                )
+                save_col, cancel_col = st.columns(2)
+                saved = save_col.form_submit_button("💾 Save Changes", type="primary", use_container_width=True)
+                cancelled = cancel_col.form_submit_button("✖ Cancel", use_container_width=True)
+
+                if saved:
+                    if not new_nickname.strip():
+                        st.error("Nickname cannot be empty.")
+                    else:
+                        updated = {
+                            "id": acc["id"],
+                            "nickname": new_nickname.strip(),
+                            "kite_api_key": _encrypt(new_api_key) if new_api_key else acc["kite_api_key"],
+                            "kite_api_secret": _encrypt(new_api_secret) if new_api_secret else acc["kite_api_secret"],
+                            "kite_user_id": acc.get("kite_user_id"),
+                            "access_token": acc.get("access_token"),
+                            "token_generated_at": acc.get("token_generated_at"),
+                            "is_active": acc.get("is_active", 1),
+                            "created_at": acc.get("created_at", datetime.utcnow().isoformat()),
+                        }
+                        try:
+                            upsert_account(conn, updated)
+                            st.success("✅ Account updated.")
+                            st.session_state["editing_account"] = None
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Failed to update: {e}")
+
+                if cancelled:
+                    st.session_state["editing_account"] = None
+                    st.rerun()
 
         # ── Login flow ─────────────────────────────────────────────────────────
         st.divider()
