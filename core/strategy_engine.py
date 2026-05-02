@@ -117,4 +117,13 @@ def run_all_strategies(
     if progress_cb:
         progress_cb(total, total, "Done")
 
+    # Send Telegram alerts for newly generated signals
+    if all_signals:
+        try:
+            from core.notifier import send_bulk_signal_alerts, is_configured
+            if is_configured():
+                send_bulk_signal_alerts(all_signals, source="Strategy")
+        except Exception:
+            pass  # never block signal generation due to notification failure
+
     return all_signals
