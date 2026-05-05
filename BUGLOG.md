@@ -66,6 +66,26 @@ Running log of all bugs found and fixed. Newest first.
 
 ---
 
+### BUG-007 — Supabase: `auto_execute` column missing in cloud DB
+**File:** `core/db.py` → `upsert_strategy_assignment()`
+**Error:** `postgrest.exceptions.APIError` — column `auto_execute` does not exist in Supabase `strategy_assignments` table
+**Root cause:** New columns were added via SQLite `ALTER TABLE` migrations locally, but Supabase schema must be updated manually via SQL Editor. The `_run_migrations()` function only applies to SQLite mode.
+**Fix (code):** Added try/except fallback in `upsert_strategy_assignment` — retries without `auto_execute` if Supabase rejects the upsert.
+**Fix (DB):** Run in Supabase SQL Editor:
+```sql
+ALTER TABLE strategy_assignments ADD COLUMN IF NOT EXISTS auto_execute INTEGER DEFAULT 0;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS t1_hit_at TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS t2_hit_at TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS t3_hit_at TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS sl_hit_at TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS kite_order_id TEXT;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS gtt_sl_id INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS gtt_t1_id INTEGER;
+ALTER TABLE signals ADD COLUMN IF NOT EXISTS gtt_t2_id INTEGER;
+```
+
+---
+
 ## Known Limitations / Future Work
 
 | # | Item | Priority |

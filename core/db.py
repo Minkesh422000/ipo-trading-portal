@@ -539,7 +539,13 @@ def get_strategy_assignments(conn: Optional[sqlite3.Connection], strategy_id: st
 
 def upsert_strategy_assignment(conn: Optional[sqlite3.Connection], assignment: dict) -> None:
     if DATABASE_MODE == "supabase":
-        _get_supabase().table("strategy_assignments").upsert(assignment).execute()
+        sb = _get_supabase()
+        try:
+            sb.table("strategy_assignments").upsert(assignment).execute()
+        except Exception:
+            # Fallback: retry without auto_execute in case column not yet added in Supabase
+            fallback = {k: v for k, v in assignment.items() if k != "auto_execute"}
+            sb.table("strategy_assignments").upsert(fallback).execute()
         return
     conn.execute("""
         INSERT OR REPLACE INTO strategy_assignments
