@@ -18,7 +18,7 @@ import streamlit as st
 
 from core.db import (
     get_all_accounts, get_pending_signals, get_signal_history,
-    init_db, update_signal_status,
+    get_active_signals, init_db, update_signal_status,
 )
 from core.order_manager import (
     OrderError, cancel_gtt, modify_gtt_sl_to_breakeven,
@@ -33,8 +33,8 @@ conn = init_db()
 accounts = get_all_accounts(conn)
 acc_map  = {a["id"]: a["nickname"] for a in accounts}
 
-tab_signals, tab_scanner, tab_history = st.tabs(
-    ["🔔 Pending Signals", "🔭 Live Scanner", "📋 Signal History"]
+tab_signals, tab_active, tab_scanner, tab_history = st.tabs(
+    ["🔔 Pending Signals", "🤖 Bot Positions", "🔭 Live Scanner", "📋 Signal History"]
 )
 
 
@@ -224,12 +224,20 @@ with tab_signals:
 
             with st.container(border=True):
                 hc1, hc2 = st.columns([3, 1])
+                auto_badge = " 🤖 Auto-Ordered" if sig.get("kite_order_id") else ""
                 hc1.markdown(
-                    f"### 🟢 {sig['symbol']} — {sig.get('company', '')} `BUY`"
+                    f"### 🟢 {sig['symbol']} — {sig.get('company', '')} `BUY`{auto_badge}"
                 )
+                gtt_info = ""
+                if sig.get("gtt_sl_id"):
+                    gtt_info = (
+                        f" · GTT-SL #{sig['gtt_sl_id']}"
+                        + (f" | T1 #{sig['gtt_t1_id']}" if sig.get("gtt_t1_id") else "")
+                        + (f" | T2 #{sig['gtt_t2_id']}" if sig.get("gtt_t2_id") else "")
+                    )
                 hc1.caption(
                     f"Account: **{account_name}** · Strategy: `{sig.get('strategy_id','')}` · "
-                    f"{sig['generated_at'][:16]} UTC"
+                    f"{sig['generated_at'][:16]} UTC{gtt_info}"
                 )
 
                 dc1, dc2, dc3, dc4, dc5, dc6 = st.columns(6)
@@ -307,7 +315,65 @@ with tab_signals:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Tab 2: Live Scanner
+# Tab 2: Bot Positions (auto-ordered + actively tracked)
+# ══════════════════════════════════════════════════════════════════════════════
+_STATUS_ICON = {
+    "PENDING_FILL": "⏳",
+    "EXECUTED":     "🟡",
+    "T1_HIT":       "🟢",
+    "T2_HIT":       "✅",
+    "T3_HIT":       "🏆",
+    "STOPPED_OUT":  "🔴",
+}
+
+with tab_active:
+    st.markdown(
+        "Live view of positions placed by the **IPO Swing Bot** — "
+        "automatically updated each time you refresh this page."
+    )
+    active_sigs = get_active_signals(conn)
+
+    if not active_sigs:
+        st.info(
+            "No active bot positions. Run `python run_bot.py` to start the bot, "
+            "or use **▶ Run All Strategy Signals** and enable Auto-Execute in ⚡ Strategies."
+        )
+    else:
+        st.markdown(f"**{len(active_sigs)} active position(s):**")
+        for sig in active_sigs:
+            account_name = acc_map.get(sig["account_id"], sig["account_id"])
+            status = sig.get("status", "EXECUTED")
+            icon   = _STATUS_ICON.get(status, "🟡")
+            entry  = sig.get("entry_price") or 0.0
+            sl     = sig.get("sl_price") or 0.0
+            t1, t2, t3 = sig.get("t1") or 0, sig.get("t2") or 0, sig.get("t3") or 0
+            qty    = sig.get("quantity") or 0
+            R      = entry - sl
+
+            with st.container(border=True):
+                sc1, sc2 = st.columns([4, 1])
+                sc1.markdown(f"### {icon} {sig['symbol']} — {sig.get('company', '')}")
+                sc2.markdown(f"**`{status}`**")
+                sc1.caption(
+                    f"Account: **{account_name}** · "
+                    f"Order: `{sig.get('kite_order_id', '-')}` · "
+                    f"GTT-SL: `{sig.get('gtt_sl_id', '-')}` · "
+                    f"GTT-T1: `{sig.get('gtt_t1_id', '-')}` · "
+                    f"GTT-T2: `{sig.get('gtt_t2_id', '-')}`"
+                )
+                mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
+                mc1.metric("Entry", f"₹{entry:.2f}")
+                mc2.metric("SL",    f"₹{sl:.2f}")
+                mc3.metric("T1",    f"₹{t1:.2f}", delta="1R" if not sig.get("t1_hit_at") else "✓ Hit")
+                mc4.metric("T2",    f"₹{t2:.2f}", delta="2R" if not sig.get("t2_hit_at") else "✓ Hit")
+                mc5.metric("T3",    f"₹{t3:.2f}", delta="3R" if not sig.get("t3_hit_at") else "✓ Hit")
+                mc6.metric("Qty",   str(qty))
+                if R > 0:
+                    st.caption(f"R = ₹{R:.2f} | Risk = ₹{R * qty:,.0f} | R:R = 1:3")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tab 3: Live Scanner
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_scanner:
     st.markdown(

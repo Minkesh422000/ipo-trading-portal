@@ -111,42 +111,55 @@ for strat in strategies:
 
         # ── Account assignment ─────────────────────────────────────────────────
         with st.expander("👤 Assign to Accounts"):
-            with st.form(f"assign_form_{strat['id']}"):
-                if not accounts:
-                    st.warning("No accounts configured yet.")
-                else:
+            if not accounts:
+                st.warning("No accounts configured yet.")
+            else:
+                with st.form(f"assign_form_{strat['id']}"):
+                    # Collect widget return values directly — no session_state writes inside form
+                    rows = []
                     for acc in accounts:
                         existing = next((a for a in assignments if a["account_id"] == acc["id"]), None)
-                        ac1, ac2, ac3 = st.columns([1, 1, 1])
+                        st.markdown(f"**{acc['nickname']}**")
+                        ac1, ac2, ac3, ac4 = st.columns([1, 1, 1, 1])
+
                         assigned = ac1.checkbox(
-                            acc["nickname"], value=bool(existing and existing.get("is_active")),
-                            key=f"assign_{strat['id']}_{acc['id']}"
+                            "Active",
+                            value=bool(existing and existing.get("is_active")),
+                            key=f"assign_{strat['id']}_{acc['id']}",
                         )
-                        risk_val = existing.get("risk_pct", 0.01) if existing else 0.01
+                        risk_val = (existing.get("risk_pct", 0.01) if existing else 0.01)
                         risk = ac2.number_input(
-                            "Risk %", value=risk_val * 100, min_value=0.1, max_value=10.0,
-                            step=0.1, format="%.1f", key=f"risk_{strat['id']}_{acc['id']}"
+                            "Risk %", value=float(risk_val * 100),
+                            min_value=0.1, max_value=10.0,
+                            step=0.1, format="%.1f",
+                            key=f"risk_{strat['id']}_{acc['id']}",
                         )
-                        cap_val = existing.get("capital_alloc") or 1_000_000.0
+                        cap_val = float((existing.get("capital_alloc") if existing else None) or 1_000_000.0)
                         capital = ac3.number_input(
                             "Capital (₹)", value=cap_val, min_value=10_000.0,
-                            step=10_000.0, key=f"cap_{strat['id']}_{acc['id']}"
+                            step=10_000.0,
+                            key=f"cap_{strat['id']}_{acc['id']}",
                         )
+                        auto_val = bool(existing and existing.get("auto_execute"))
+                        auto = ac4.checkbox(
+                            "🤖 Auto-execute",
+                            value=auto_val,
+                            key=f"auto_{strat['id']}_{acc['id']}",
+                            help="Bot places LIMIT buy + GTT SL/T1/T2 automatically when signal fires.",
+                        )
+                        rows.append((acc, assigned, risk, capital, auto))
+                        st.divider()
 
-                        # Store for save
-                        st.session_state[f"sa_{strat['id']}_{acc['id']}"] = {
-                            "assigned": assigned, "risk": risk / 100, "capital": capital
-                        }
-
-                    if st.form_submit_button("💾 Save Assignments"):
-                        for acc in accounts:
-                            sa = st.session_state.get(f"sa_{strat['id']}_{acc['id']}", {})
+                    submitted = st.form_submit_button("💾 Save Assignments", type="primary")
+                    if submitted:
+                        for acc, assigned, risk, capital, auto in rows:
                             upsert_strategy_assignment(conn, {
                                 "strategy_id": strat["id"],
                                 "account_id": acc["id"],
-                                "risk_pct": sa.get("risk", 0.01),
-                                "capital_alloc": sa.get("capital", 1_000_000.0),
-                                "is_active": int(sa.get("assigned", False)),
+                                "risk_pct": risk / 100,
+                                "capital_alloc": capital,
+                                "is_active": int(assigned),
+                                "auto_execute": int(auto),
                             })
-                        st.success("Assignments saved.")
+                        st.success("✅ Assignments saved.")
                         st.rerun()

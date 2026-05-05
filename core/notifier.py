@@ -153,3 +153,124 @@ def send_order_placed_alert(symbol: str, order_id: str, order_type: str,
         f"{gtt_line}"
     )
     return send_message(text)
+
+
+# ── Bot-specific alerts ────────────────────────────────────────────────────────
+
+def send_auto_order_alert(
+    symbol: str,
+    company: str,
+    entry: float,
+    sl: float,
+    t1: float,
+    t2: float,
+    t3: float,
+    qty: int,
+    order_id: str,
+    gtt_sl_id: Optional[int] = None,
+    gtt_t1_id: Optional[int] = None,
+    gtt_t2_id: Optional[int] = None,
+) -> bool:
+    """Alert when the bot auto-places a LIMIT entry + GTT orders."""
+    R = entry - sl
+    risk_amt = round(R * qty, 0)
+    t1_qty = qty // 3
+    t2_qty = qty // 3
+    sl_qty = qty - t1_qty - t2_qty
+
+    gtt_lines = ""
+    if gtt_sl_id:
+        gtt_lines += f"\n  SL GTT #{gtt_sl_id}: sell {sl_qty} @ ₹{sl:,.2f}"
+    if gtt_t1_id:
+        gtt_lines += f"\n  T1 GTT #{gtt_t1_id}: sell {t1_qty} @ ₹{t1:,.2f}"
+    if gtt_t2_id:
+        gtt_lines += f"\n  T2 GTT #{gtt_t2_id}: sell {t2_qty} @ ₹{t2:,.2f}"
+
+    text = (
+        f"🤖 <b>AUTO ORDER PLACED</b>\n"
+        f"<b>{symbol}</b> ({company})\n"
+        f"\n"
+        f"<b>LIMIT BUY:</b> ₹{entry:,.2f} × {qty:,} | Order #{order_id}\n"
+        f"<b>Risk:</b> ₹{risk_amt:,.0f} (R=₹{R:.2f})\n"
+        f"\n"
+        f"<b>GTT Orders:</b>{gtt_lines}\n"
+        f"\n"
+        f"<b>Targets:</b> T1 ₹{t1:,.2f} | T2 ₹{t2:,.2f} | T3 ₹{t3:,.2f}\n"
+        f"<a href='https://kite.zerodha.com/chart/web/ciq/NSE/{symbol}/EQ'>📈 Chart</a>"
+    )
+    return send_message(text)
+
+
+def send_target_hit_alert(
+    symbol: str,
+    target_name: str,    # "T1", "T2", or "T3"
+    hit_price: float,
+    entry: float,
+    pnl_pct: float,
+    new_sl: Optional[float] = None,
+) -> bool:
+    """Alert when a profit target is hit."""
+    icons = {"T1": "🎯", "T2": "✅", "T3": "🏆"}
+    icon = icons.get(target_name, "🎯")
+    sl_line = f"\n<b>SL moved to:</b> ₹{new_sl:,.2f}" if new_sl else ""
+    pnl_sign = "+" if pnl_pct >= 0 else ""
+    text = (
+        f"{icon} <b>{target_name} HIT — {symbol}</b>\n"
+        f"<b>Hit price:</b> ₹{hit_price:,.2f}  |  <b>Entry:</b> ₹{entry:,.2f}\n"
+        f"<b>P&L:</b> {pnl_sign}{pnl_pct:.1f}%"
+        f"{sl_line}"
+    )
+    return send_message(text)
+
+
+def send_sl_hit_alert(
+    symbol: str,
+    trigger_price: float,
+    entry: float,
+    loss_pct: float,
+) -> bool:
+    """Alert when stop-loss is triggered."""
+    text = (
+        f"🔴 <b>STOPPED OUT — {symbol}</b>\n"
+        f"<b>SL triggered:</b> ₹{trigger_price:,.2f}  |  <b>Entry:</b> ₹{entry:,.2f}\n"
+        f"<b>Loss:</b> -{abs(loss_pct):.1f}%"
+    )
+    return send_message(text)
+
+
+def send_daily_summary(scanned: int, signals_fired: int, orders_placed: int) -> bool:
+    """EOD summary from the bot's daily scan."""
+    text = (
+        f"📊 <b>EOD BOT SUMMARY</b>\n"
+        f"Scanned: <b>{scanned}</b> IPOs\n"
+        f"Signals: <b>{signals_fired}</b>\n"
+        f"Orders placed: <b>{orders_placed}</b>"
+    )
+    return send_message(text)
+
+
+def send_bot_startup_alert(accounts_count: int = 0) -> bool:
+    """Alert when the bot starts up."""
+    from datetime import datetime
+    import pytz
+    ist = pytz.timezone("Asia/Kolkata")
+    now_ist = datetime.now(ist).strftime("%H:%M IST")
+    text = (
+        f"🚀 <b>IPO Swing Bot Started</b>\n"
+        f"Monitoring <b>{accounts_count}</b> account(s)\n"
+        f"Started at: {now_ist}\n"
+        f"Next scan: <b>15:35 IST</b> (after market close)"
+    )
+    return send_message(text)
+
+
+def send_token_warning(account_id: str, nickname: str = "") -> bool:
+    """Alert when a Kite access token has expired."""
+    label = nickname or account_id
+    text = (
+        f"⚠️ <b>Kite Token Expired</b>\n"
+        f"Account: <b>{label}</b>\n"
+        f"Please re-login at the Streamlit app → Accounts page.\n"
+        f"Bot will skip this account until token is refreshed."
+    )
+    return send_message(text)

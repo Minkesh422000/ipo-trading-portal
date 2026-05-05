@@ -180,7 +180,31 @@ def init_db(db_path: str = DB_PATH) -> Optional[sqlite3.Connection]:
         );
     """)
     conn.commit()
+    _run_migrations(conn)
     return conn
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Apply incremental ALTER TABLE migrations safely (idempotent)."""
+    migrations = [
+        # v2 bot additions to signals
+        "ALTER TABLE signals ADD COLUMN t1_hit_at TEXT",
+        "ALTER TABLE signals ADD COLUMN t2_hit_at TEXT",
+        "ALTER TABLE signals ADD COLUMN t3_hit_at TEXT",
+        "ALTER TABLE signals ADD COLUMN sl_hit_at TEXT",
+        "ALTER TABLE signals ADD COLUMN kite_order_id TEXT",
+        "ALTER TABLE signals ADD COLUMN gtt_sl_id INTEGER",
+        "ALTER TABLE signals ADD COLUMN gtt_t1_id INTEGER",
+        "ALTER TABLE signals ADD COLUMN gtt_t2_id INTEGER",
+        # v2 bot addition to strategy_assignments
+        "ALTER TABLE strategy_assignments ADD COLUMN auto_execute INTEGER DEFAULT 0",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+        except Exception:
+            pass  # column already exists — skip silently
+    conn.commit()
 
 
 def _ensure_supabase_tables():
@@ -519,9 +543,9 @@ def upsert_strategy_assignment(conn: Optional[sqlite3.Connection], assignment: d
         return
     conn.execute("""
         INSERT OR REPLACE INTO strategy_assignments
-        (strategy_id, account_id, risk_pct, capital_alloc, is_active)
-        VALUES (:strategy_id, :account_id, :risk_pct, :capital_alloc, :is_active)
-    """, assignment)
+        (strategy_id, account_id, risk_pct, capital_alloc, is_active, auto_execute)
+        VALUES (:strategy_id, :account_id, :risk_pct, :capital_alloc, :is_active, :auto_execute)
+    """, {**assignment, "auto_execute": assignment.get("auto_execute", 0)})
     conn.commit()
 
 
@@ -641,5 +665,98 @@ def get_gtts(conn: Optional[sqlite3.Connection], account_id: str) -> list[dict]:
         return res.data or []
     rows = conn.execute(
         "SELECT * FROM gtt_orders WHERE account_id=? ORDER BY created_at DESC", (account_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_gtt_status(conn: Optional[sqlite3.Connection], kite_gtt_id: int, status: str) -> None:
+    if DATABASE_MODE == "supabase":
+        _get_supabase().table("gtt_orders").update({"status": status}).eq("kite_gtt_id", kite_gtt_id).execute()
+        return
+    conn.execute("UPDATE gtt_orders SET status=? WHERE kite_gtt_id=?", (status, kite_gtt_id))
+    conn.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Bot-specific signal functions
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_active_signals(conn: Optional[sqlite3.Connection], account_id: str = None) -> list[dict]:
+    """Return signals in EXECUTED or PENDING_FILL status (live positions being tracked)."""
+    active_statuses = ("EXECUTED", "PENDING_FILL", "T1_HIT", "T2_HIT")
+    placeholders = ",".join("?" for _ in active_statuses)
+    if DATABASE_MODE == "supabase":
+        q = (_get_supabase().table("signals").select("*")
+             .in_("status", list(active_statuses)))
+        if account_id:
+            q = q.eq("account_id", account_id)
+        return (q.order("generated_at", desc=True).execute()).data or []
+    if account_id:
+        rows = conn.execute(
+            f"SELECT * FROM signals WHERE status IN ({placeholders}) AND account_id=? ORDER BY generated_at DESC",
+            (*active_statuses, account_id),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            f"SELECT * FROM signals WHERE status IN ({placeholders}) ORDER BY generated_at DESC",
+            active_statuses,
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_signal_target_hit(
+    conn: Optional[sqlite3.Connection],
+    signal_id: str,
+    target: str,          # "T1", "T2", "T3", or "SL"
+    hit_at: str,          # ISO timestamp
+    new_status: str,      # "T1_HIT", "T2_HIT", "T3_HIT", "STOPPED_OUT"
+) -> None:
+    col = f"{target.lower()}_hit_at"
+    if DATABASE_MODE == "supabase":
+        _get_supabase().table("signals").update({col: hit_at, "status": new_status}).eq("id", signal_id).execute()
+        return
+    conn.execute(f"UPDATE signals SET {col}=?, status=? WHERE id=?", (hit_at, new_status, signal_id))
+    conn.commit()
+
+
+def update_signal_gtt_ids(
+    conn: Optional[sqlite3.Connection],
+    signal_id: str,
+    gtt_sl_id: Optional[int] = None,
+    gtt_t1_id: Optional[int] = None,
+    gtt_t2_id: Optional[int] = None,
+    kite_order_id: Optional[str] = None,
+) -> None:
+    """Persist GTT IDs and entry order ID on a signal after auto-placement."""
+    updates: dict = {}
+    if gtt_sl_id is not None:
+        updates["gtt_sl_id"] = gtt_sl_id
+    if gtt_t1_id is not None:
+        updates["gtt_t1_id"] = gtt_t1_id
+    if gtt_t2_id is not None:
+        updates["gtt_t2_id"] = gtt_t2_id
+    if kite_order_id is not None:
+        updates["kite_order_id"] = kite_order_id
+    if not updates:
+        return
+    if DATABASE_MODE == "supabase":
+        _get_supabase().table("signals").update(updates).eq("id", signal_id).execute()
+        return
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    conn.execute(
+        f"UPDATE signals SET {set_clause} WHERE id=?",
+        (*updates.values(), signal_id),
+    )
+    conn.commit()
+
+
+def get_auto_execute_assignments(conn: Optional[sqlite3.Connection]) -> list[dict]:
+    """Return strategy assignments with auto_execute=1 across all active strategies."""
+    if DATABASE_MODE == "supabase":
+        res = (_get_supabase().table("strategy_assignments")
+               .select("*").eq("is_active", 1).eq("auto_execute", 1).execute())
+        return res.data or []
+    rows = conn.execute(
+        "SELECT * FROM strategy_assignments WHERE is_active=1 AND auto_execute=1"
     ).fetchall()
     return [dict(r) for r in rows]

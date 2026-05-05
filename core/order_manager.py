@@ -351,3 +351,201 @@ def cancel_gtt(account_id: str, kite_gtt_id: int, conn) -> bool:
         return True
     except Exception:
         return False
+
+
+# ── Bot automation functions ───────────────────────────────────────────────────
+
+def _place_gtt_single(
+    kite,
+    account_id: str,
+    symbol: str,
+    trigger_price: float,
+    sell_price: float,
+    quantity: int,
+    last_price: float,
+    conn,
+    signal_id: str,
+    label: str,          # "SL", "T1", or "T2" — for DB record
+) -> int:
+    """
+    Place a single-leg GTT SELL order. Returns Kite GTT ID.
+    Raises OrderError on failure.
+    """
+    try:
+        gtt_id = kite.place_gtt(
+            trigger_type=kite.GTT_TYPE_SINGLE,
+            tradingsymbol=symbol,
+            exchange="NSE",
+            trigger_values=[trigger_price],
+            last_price=last_price,
+            orders=[{
+                "transaction_type": kite.TRANSACTION_TYPE_SELL,
+                "quantity": quantity,
+                "order_type": kite.ORDER_TYPE_LIMIT,
+                "product": kite.PRODUCT_CNC,
+                "price": round(sell_price, 2),
+            }],
+        )
+    except Exception as exc:
+        raise OrderError(f"GTT {label} placement failed for {symbol}: {exc}") from exc
+
+    if conn is not None:
+        from core.db import insert_gtt
+        insert_gtt(conn, {
+            "id": str(uuid.uuid4()),
+            "account_id": account_id,
+            "kite_gtt_id": gtt_id,
+            "symbol": symbol,
+            "upper_trigger": trigger_price if label in ("T1", "T2") else None,
+            "lower_trigger": trigger_price if label == "SL" else None,
+            "quantity": quantity,
+            "status": "active",
+            "created_at": datetime.utcnow().isoformat(),
+            "signal_id": signal_id or "",
+        })
+
+    return gtt_id
+
+
+def auto_place_ipo_order(
+    account_id: str,
+    symbol: str,
+    qty: int,
+    entry: float,
+    sl: float,
+    t1: float,
+    t2: float,
+    t3: float,           # informational — T3 monitored by position_tracker
+    conn=None,
+    strategy_id: str = None,
+    signal_id: str = None,
+) -> dict:
+    """
+    Full auto-order for IPO breakout strategy:
+
+    1. LIMIT BUY at entry (2-week high)
+    2. GTT-SL: single trigger SELL full qty at sl_price (2-week low)
+    3. GTT-T1: single trigger SELL 1/3 qty at t1
+    4. GTT-T2: single trigger SELL 1/3 qty at t2
+       (T3 and trailing SL managed by position_tracker after T2 fires)
+
+    Returns dict with order_id and gtt IDs. Raises OrderError on critical failure.
+    """
+    kite = KiteManager.get_kite(account_id, conn)
+    if kite is None:
+        raise OrderError(f"No active Kite session for account {account_id}.")
+
+    t1_qty = qty // 3
+    t2_qty = qty // 3
+    sl_qty = qty  # full qty protected initially
+
+    result: dict = {
+        "order_id": None,
+        "gtt_sl_id": None,
+        "gtt_t1_id": None,
+        "gtt_t2_id": None,
+        "errors": [],
+    }
+
+    # Step 1: LIMIT BUY entry order
+    result["order_id"] = place_order(
+        account_id=account_id,
+        symbol=symbol,
+        transaction_type="BUY",
+        quantity=qty,
+        order_type="LIMIT",
+        price=round(entry, 2),
+        product="CNC",
+        conn=conn,
+        strategy_id=strategy_id,
+        signal_id=signal_id,
+    )
+
+    # Step 2: GTT-SL (full qty at 2-week low)
+    sl_sell_price = round(sl * 0.995, 2)  # slight buffer below trigger
+    try:
+        result["gtt_sl_id"] = _place_gtt_single(
+            kite, account_id, symbol,
+            trigger_price=sl, sell_price=sl_sell_price,
+            quantity=sl_qty, last_price=entry,
+            conn=conn, signal_id=signal_id, label="SL",
+        )
+    except OrderError as exc:
+        result["errors"].append(str(exc))
+
+    # Step 3: GTT-T1 (1/3 qty at T1)
+    if t1_qty > 0:
+        try:
+            result["gtt_t1_id"] = _place_gtt_single(
+                kite, account_id, symbol,
+                trigger_price=t1, sell_price=round(t1 * 0.995, 2),
+                quantity=t1_qty, last_price=entry,
+                conn=conn, signal_id=signal_id, label="T1",
+            )
+        except OrderError as exc:
+            result["errors"].append(str(exc))
+
+    # Step 4: GTT-T2 (1/3 qty at T2)
+    if t2_qty > 0:
+        try:
+            result["gtt_t2_id"] = _place_gtt_single(
+                kite, account_id, symbol,
+                trigger_price=t2, sell_price=round(t2 * 0.995, 2),
+                quantity=t2_qty, last_price=entry,
+                conn=conn, signal_id=signal_id, label="T2",
+            )
+        except OrderError as exc:
+            result["errors"].append(str(exc))
+
+    # Persist GTT IDs on signal
+    if conn is not None and signal_id:
+        from core.db import update_signal_gtt_ids, update_signal_status
+        update_signal_gtt_ids(
+            conn, signal_id,
+            gtt_sl_id=result["gtt_sl_id"],
+            gtt_t1_id=result["gtt_t1_id"],
+            gtt_t2_id=result["gtt_t2_id"],
+            kite_order_id=result["order_id"],
+        )
+        update_signal_status(conn, signal_id, "PENDING_FILL", order_id=result["order_id"])
+
+    return result
+
+
+def update_sl_gtt(
+    account_id: str,
+    old_gtt_id: int,
+    symbol: str,
+    new_qty: int,
+    new_sl: float,
+    last_price: float,
+    conn=None,
+    signal_id: str = None,
+) -> int:
+    """
+    Replace the SL GTT with an updated quantity and price.
+    Called by position_tracker after T1 or T2 is hit.
+    Returns new GTT ID.
+    """
+    kite = KiteManager.get_kite(account_id, conn)
+    if kite is None:
+        raise OrderError(f"No active Kite session for account {account_id}.")
+
+    # Cancel old SL GTT (ignore if already triggered/gone)
+    try:
+        kite.delete_gtt(trigger_id=old_gtt_id)
+    except Exception:
+        pass
+
+    # Place new SL GTT
+    new_gtt_id = _place_gtt_single(
+        kite, account_id, symbol,
+        trigger_price=new_sl,
+        sell_price=round(new_sl * 0.995, 2),
+        quantity=new_qty,
+        last_price=last_price,
+        conn=conn,
+        signal_id=signal_id or "",
+        label="SL",
+    )
+    return new_gtt_id
