@@ -106,20 +106,35 @@ class IPOBreakoutStrategy(BaseStrategy):
                 continue  # obs window not yet complete, or no post-window data
 
             two_week_high = max(b["high"] for b in obs_bars)
-            two_week_low  = min(b["low"]  for b in obs_bars)
-            R = two_week_high - two_week_low
+
+            # SL = lowest low from listing date all the way to breakout day
+            # (matches Pine Script: preEntryLowest keeps updating until entryLocked)
+            # Before breakout: SL = min(low) of ALL bars seen so far post-listing
+            # At breakout: SL locked at that day's running low
+            all_bars_so_far = obs_bars + post_bars
+            two_week_low = min(b["low"] for b in obs_bars)   # baseline from obs window
+
+            # Find first bar where CLOSE crosses above 2WH (Pine Script: ta.crossover close)
+            breakout_idx = None
+            running_low  = two_week_low
+            for i, b in enumerate(post_bars):
+                running_low = min(running_low, b["low"])      # keep updating daily
+                if b["close"] > two_week_high:                # close crossover — matches Pine
+                    breakout_idx = i
+                    break
+
+            # Signal: no breakout yet → LIMIT order candidate
+            # (if breakout happened, we'd need to track the live trade instead)
+            if breakout_idx is not None:
+                continue  # already broken out — skip
+
+            sl_price = round(running_low, 2)   # locked at lowest low up to today
+            R = two_week_high - sl_price
 
             if R <= 0:
                 continue
 
-            # Only emit a signal if price has NOT yet crossed 2WH (entry not yet executed)
-            # i.e. we want to place a LIMIT order that is still pending
-            already_broken_out = any(b["high"] >= two_week_high for b in post_bars)
-            if already_broken_out:
-                continue  # would need a live order check; skip for now
-
             entry_price = round(two_week_high, 2)
-            sl_price    = round(two_week_low, 2)
             position_size = floor((capital * risk_pct) / R)
 
             if position_size <= 0:
@@ -245,17 +260,22 @@ class IPOBreakoutStrategy(BaseStrategy):
                 (two_week_high - current_price) / two_week_high * 100, 2
             ) if two_week_high else 0.0
 
-            # Find first signal bar (first bar where high >= 2WH after obs window)
+            # Find first signal bar where CLOSE crosses above 2WH (Pine Script logic)
+            # SL tracks running low from listing to that bar — not frozen at obs window
             first_signal_idx = None
+            running_low = two_week_low   # starts at obs window low, updates daily
+            running_low_at_signal = two_week_low
             for i, b in enumerate(post_bars):
-                if b["high"] >= two_week_high:
+                running_low = min(running_low, b["low"])
+                if b["close"] > two_week_high:
                     first_signal_idx = i
+                    running_low_at_signal = running_low
                     break
 
             if first_signal_idx is None:
                 status = "NEAR" if abs(pct_away) <= 3.0 else "WATCHING"
                 entry_price = round(two_week_high, 2)
-                sl_price    = round(two_week_low, 2)
+                sl_price    = round(running_low, 2)   # running low up to today
                 t1 = round(entry_price + R, 2) if R > 0 else None
                 t2 = round(entry_price + 2 * R, 2) if R > 0 else None
                 t3 = round(entry_price + 3 * R, 2) if R > 0 else None
@@ -286,7 +306,7 @@ class IPOBreakoutStrategy(BaseStrategy):
             status = "FRESH" if bars_since_signal <= 5 else "PAST"
 
             entry_price = round(two_week_high, 2)
-            sl_price    = round(two_week_low, 2)
+            sl_price    = round(running_low_at_signal, 2)   # locked at signal day
 
             if R <= 0:
                 entry_status = "⚠️ Invalid R"
