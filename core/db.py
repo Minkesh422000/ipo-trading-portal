@@ -756,6 +756,21 @@ def update_signal_gtt_ids(
     conn.commit()
 
 
+def delete_strategy_assignment(conn: Optional[sqlite3.Connection], strategy_id: str, account_id: str) -> None:
+    if DATABASE_MODE == "supabase":
+        (_get_supabase().table("strategy_assignments")
+         .delete()
+         .eq("strategy_id", strategy_id)
+         .eq("account_id", account_id)
+         .execute())
+        return
+    conn.execute(
+        "DELETE FROM strategy_assignments WHERE strategy_id=? AND account_id=?",
+        (strategy_id, account_id),
+    )
+    conn.commit()
+
+
 def get_auto_execute_assignments(conn: Optional[sqlite3.Connection]) -> list[dict]:
     """Return strategy assignments with auto_execute=1 across all active strategies."""
     if DATABASE_MODE == "supabase":
