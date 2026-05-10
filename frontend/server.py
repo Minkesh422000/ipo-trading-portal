@@ -134,7 +134,8 @@ def kite_login_url(account_id):
         login_url = KiteManager.generate_login_url(api_key)
         # Append account_id as state so callback knows which account to link
         sep = "&" if "?" in login_url else "?"
-        callback = f"http://localhost:7654/kite-callback?account_id={account_id}"
+        base_url = os.environ.get("APP_BASE_URL", "http://localhost:7654")
+        callback = f"{base_url}/kite-callback?account_id={account_id}"
         return jsonify({"ok": True, "url": login_url, "callback": callback})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -638,6 +639,9 @@ def _run_ipo_scanner(conn, force_refresh: bool = False) -> list[dict]:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 7654))
+    # Bind to 0.0.0.0 on Railway/cloud, localhost-only for local dev
+    host = "0.0.0.0" if os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("PORT") else "127.0.0.1"
     print(f"[server] Serving frontend from: {FRONTEND_DIR}")
-    print(f"[server] Starting on http://localhost:7654  (localhost only)")
-    app.run(host="127.0.0.1", port=7654, debug=False)
+    print(f"[server] Starting on http://{host}:{port}")
+    app.run(host=host, port=port, debug=False)
