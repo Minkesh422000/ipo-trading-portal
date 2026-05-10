@@ -307,6 +307,7 @@ class IPOBreakoutStrategy(BaseStrategy):
 
             entry_price = round(two_week_high, 2)
             sl_price    = round(running_low_at_signal, 2)   # locked at signal day
+            R           = entry_price - sl_price             # recompute from actual SL, not obs window
 
             if R <= 0:
                 entry_status = "⚠️ Invalid R"
