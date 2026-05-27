@@ -1,11 +1,9 @@
 name: IPO Breakout WhatsApp Alerts
 
 on:
-  schedule:
-    # 4:05 PM IST = 10:35 UTC, Monday to Friday
-    - cron: '35 10 * * 1-5'
-
-  # Allow manual trigger from GitHub Actions tab (useful for testing)
+  # Triggered by cron-job.org via GitHub API (more reliable than GitHub's native scheduler)
+  # POST https://api.github.com/repos/Minkesh422000/ipo-trading-portal/actions/workflows/ipo_alerts.yml/dispatches
+  # Schedule: 35 10 * * 1-5  (Mon–Fri 10:35 UTC = 4:05 PM IST)
   workflow_dispatch:
 
 jobs:
