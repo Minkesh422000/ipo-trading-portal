@@ -675,6 +675,53 @@ def main() -> None:
     # Write all computed data back to Google Sheet
     write_sheet(csv_url, sheet_data)
 
+    # ── EOD summary Telegram message ──────────────────────────────────────────
+    import pytz
+    from datetime import datetime
+    ist      = pytz.timezone("Asia/Kolkata")
+    run_time = datetime.now(ist).strftime("%d %b %Y, %I:%M %p IST")
+
+    # Count statuses
+    status_counts: dict[str, list[str]] = {}
+    for sym, d in sheet_data.items():
+        lbl = d["status"]
+        status_counts.setdefault(lbl, []).append(sym)
+
+    # Build status lines (only non-empty)
+    STATUS_EMOJI = {
+        "Entry Trigger": "🚨",
+        "Near Breakout": "⚠️",
+        "T3 Hit":        "🏆",
+        "T2 Hit":        "✅",
+        "T1 Hit":        "🟢",
+        "SL Hit":        "🔴",
+        "In Trade":      "🟡",
+        "Entry Pending": "⏳",
+        "Watching":      "👀",
+        "Past":          "📦",
+    }
+    priority = ["Entry Trigger", "Near Breakout", "T3 Hit", "T2 Hit",
+                "T1 Hit", "SL Hit", "In Trade", "Entry Pending", "Watching", "Past"]
+
+    status_lines = ""
+    for lbl in priority:
+        syms = status_counts.get(lbl, [])
+        if syms:
+            emoji = STATUS_EMOJI.get(lbl, "•")
+            status_lines += f"\n{emoji} <b>{lbl}</b>: {', '.join(syms)}"
+
+    # Google Sheet URL
+    sheet_id   = _extract_sheet_id(csv_url) or ""
+    sheet_link = f"https://docs.google.com/spreadsheets/d/{sheet_id}" if sheet_id else csv_url
+
+    summary = (
+        f"✅ <b>IPO Scanner ran — {run_time}</b>\n"
+        f"Scanned <b>{len(scanner_rows)}</b> IPOs  |  Alerts sent: <b>{alerts_sent}</b>\n"
+        f"{status_lines}\n\n"
+        f"<a href='{sheet_link}'>📊 Open Google Sheet</a>"
+    )
+    send_alert(summary)
+
     print(f"\n[DONE] Scanned {len(scanner_rows)} IPO(s). Alerts: {alerts_sent}")
 
 
