@@ -135,7 +135,7 @@ class IPOBreakoutStrategy(BaseStrategy):
                 continue
 
             entry_price = round(two_week_high, 2)
-            position_size = floor((capital * risk_pct) / R)
+            position_size = floor((capital * risk_pct / 100) / R)
 
             if position_size <= 0:
                 continue

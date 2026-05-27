@@ -1,0 +1,47 @@
+name: IPO Breakout WhatsApp Alerts
+
+on:
+  schedule:
+    # 4:05 PM IST = 10:35 UTC, Monday to Friday
+    - cron: '35 10 * * 1-5'
+
+  # Allow manual trigger from GitHub Actions tab (useful for testing)
+  workflow_dispatch:
+
+jobs:
+  run-alerts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit alert_state.json back to repo
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance requests pandas pytz gspread google-auth
+
+      - name: Run IPO alert script
+        env:
+          GSHEET_CSV_URL:              ${{ secrets.GSHEET_CSV_URL }}
+          TELEGRAM_BOT_TOKEN:          ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:            ${{ secrets.TELEGRAM_CHAT_ID }}
+          GSHEET_SERVICE_ACCOUNT_JSON: ${{ secrets.GSHEET_SERVICE_ACCOUNT_JSON }}
+        run: python ipo_alert.py
+
+      - name: Commit updated alert state
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add alert_state.json
+          if git diff --staged --quiet; then
+            echo "No state change — nothing to commit."
+          else
+            git commit -m "chore: update alert_state.json [skip ci]"
+            git push
+          fi

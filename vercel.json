@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/ipo_check",
+      "schedule": "35 10 * * 1-5"
+    }
+  ]
+}
