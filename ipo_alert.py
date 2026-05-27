@@ -46,6 +46,14 @@ from strategies.ipo_breakout import IPOBreakoutStrategy
 
 STATE_FILE = os.path.join(os.path.dirname(__file__), "alert_state.json")
 
+# All possible status values — used for sheet dropdown validation
+STATUS_VALUES = [
+    "Watching", "Near Breakout", "Entry Trigger",
+    "Entry Pending", "In Trade",
+    "T1 Hit", "T2 Hit", "T3 Hit", "SL Hit",
+    "Past", "No Data",
+]
+
 # Sheet column layout (0-indexed)
 SHEET_HEADERS = [
     "nse_symbol", "name", "listing_date", "capital_allocated",
@@ -266,12 +274,13 @@ def _clean_status(row: dict) -> str:
         return "Watching"
     if status == "NEAR":
         return "Near Breakout"
-    if status == "FRESH":
-        return "Entry Trigger"
     if status == "NO_DATA":
         return "No Data"
 
-    # PAST — determine from entry_status emoji labels
+    # For FRESH and PAST: entry_status tells the real story.
+    # Check target/SL hits FIRST (before falling back to FRESH/PAST label)
+    # so a stock that broke out and immediately hit SL within 5 bars
+    # shows "SL Hit" rather than "Entry Trigger".
     if "T3 Hit" in entry_status:
         return "T3 Hit"
     if "T2 Hit" in entry_status:
@@ -280,14 +289,18 @@ def _clean_status(row: dict) -> str:
         return "T1 Hit"
     if "Stopped Out" in entry_status:
         return "SL Hit"
+
+    # FRESH with no hits yet → actionable breakout
+    if status == "FRESH":
+        return "Entry Trigger"
+
+    # PAST fallbacks
     if "In Trade" in entry_status:
         return "In Trade"
-    if "Below Entry" in entry_status:
-        return "Entry Pending"
-    if "Entry Pending" in entry_status:
+    if "Below Entry" in entry_status or "Limit @" in entry_status:
         return "Entry Pending"
 
-    return status.capitalize()
+    return "Past"
 
 
 def build_sheet_row(
@@ -318,8 +331,10 @@ def build_sheet_row(
     effective_sl = entry if t1_hit_date else sl
     sl_hit_date  = _first_low_below(bars, effective_sl, signal_date) if (effective_sl and signal_date) else ""
 
-    # Override status if SL was hit before any target (to avoid showing In Trade)
-    if sl_hit_date and not t1_hit_date and status_lbl == "In Trade":
+    # Override status if SL was hit and no target was hit yet
+    # (catches In Trade / Entry Pending / Entry Trigger that were actually stopped out)
+    _already_resolved = ("T1 Hit", "T2 Hit", "T3 Hit", "SL Hit")
+    if sl_hit_date and not t1_hit_date and status_lbl not in _already_resolved:
         status_lbl = "SL Hit"
 
     # Capital / gain
@@ -470,7 +485,7 @@ def sync_chittorgarh_to_sheet(csv_url: str) -> None:
         if sym in existing_symbols:
             continue
         ws.append_row(
-            [sym, ipo["name"], ipo["listing_date"].isoformat(), ""],
+            [sym, ipo["name"], ipo["listing_date"].isoformat(), "", "Watching"],
             value_input_option="USER_ENTERED",
         )
         existing_symbols.add(sym)
@@ -484,6 +499,38 @@ def sync_chittorgarh_to_sheet(csv_url: str) -> None:
 
 
 # ── 8. Write back to Google Sheet ─────────────────────────────────────────────
+
+def _set_status_dropdown(gc, spreadsheet_id: str, ws, status_col_idx: int) -> None:
+    """
+    Apply a dropdown data-validation rule to the status column (rows 2–1000).
+    Uses the Google Sheets API batchUpdate — idempotent, safe to call every run.
+    """
+    try:
+        rule = {
+            "setDataValidation": {
+                "range": {
+                    "sheetId": ws.id,
+                    "startRowIndex": 1,        # row 2 (0-indexed, skips header)
+                    "endRowIndex": 1000,
+                    "startColumnIndex": status_col_idx - 1,  # 0-indexed
+                    "endColumnIndex": status_col_idx,
+                },
+                "rule": {
+                    "condition": {
+                        "type": "ONE_OF_LIST",
+                        "values": [{"userEnteredValue": v} for v in STATUS_VALUES],
+                    },
+                    "inputMessage": "IPO strategy status",
+                    "strict": False,   # allow script to write computed values freely
+                    "showCustomUi": True,
+                },
+            }
+        }
+        gc.open_by_key(spreadsheet_id).batch_update({"requests": [rule]})
+        print("[SHEET] Status column dropdown updated.")
+    except Exception as e:
+        print(f"[SHEET] Could not set status dropdown: {e}")
+
 
 def write_sheet(csv_url: str, sheet_data: dict[str, dict]) -> None:
     """
@@ -572,6 +619,10 @@ def write_sheet(csv_url: str, sheet_data: dict[str, dict]) -> None:
         print(f"[SHEET] Updated {len(cells_to_update)} cells across {len(sheet_data)} symbols.")
     else:
         print("[SHEET] No cells to update.")
+
+    # Apply dropdown validation on status column (idempotent)
+    if "status" in col_idx:
+        _set_status_dropdown(gc, sheet_id, ws, col_idx["status"])
 
 
 # ── 8. Telegram alerts ─────────────────────────────────────────────────────────
