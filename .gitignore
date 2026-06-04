@@ -18,3 +18,14 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+bot.log
+*.log
+
+# Generated files
+graphify-out/
+ipo_alert_architecture.html
+
+# Claude worktrees (local only)
+.claude/worktrees/
