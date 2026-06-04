@@ -61,7 +61,7 @@ SHEET_HEADERS = [
     "t1", "t1_hit_date",
     "t2", "t2_hit_date",
     "t3", "t3_hit_date",
-    "current_price", "qty", "gain_pct", "gain_inr",
+    "current_price", "price_date", "qty", "gain_pct", "gain_inr",
 ]
 
 # ── 1. Config ──────────────────────────────────────────────────────────────────
@@ -322,6 +322,14 @@ def build_sheet_row(
     current     = row.get("current_price") or 0.0
     signal_date = row.get("signal_date") or ""
 
+    # Date of last OHLC bar (shown in sheet so user knows how fresh the price is)
+    last_bar_date = bars[-1]["date"] if bars else ""
+    if last_bar_date:
+        _d = date.fromisoformat(last_bar_date)
+        price_date = _d.strftime("%d %b %Y")
+    else:
+        price_date = ""
+
     # Hit dates (only meaningful once a breakout signal exists)
     t1_hit_date = _first_high_above(bars, t1, signal_date) if (t1 and signal_date) else ""
     t2_hit_date = _first_high_above(bars, t2, signal_date) if (t2 and signal_date) else ""
@@ -366,6 +374,7 @@ def build_sheet_row(
         "t3":            round(t3, 2),
         "t3_hit_date":   t3_hit_date,
         "current_price": round(current, 2),
+        "price_date":    price_date,
         "qty":           qty,
         "gain_pct":      gain_pct,
         "gain_inr":      gain_inr,
@@ -593,7 +602,7 @@ def write_sheet(csv_url: str, sheet_data: dict[str, dict]) -> None:
     WRITE_COLS = [
         "status", "entry_price", "sl_price",
         "t1", "t1_hit_date", "t2", "t2_hit_date", "t3", "t3_hit_date",
-        "current_price", "qty", "gain_pct", "gain_inr",
+        "current_price", "price_date", "qty", "gain_pct", "gain_inr",
     ]
 
     # Read existing rows to find which row each symbol is on
@@ -642,12 +651,18 @@ def build_near_message(row: dict, computed: dict) -> str:
     entry   = computed["entry_price"]
     sl      = computed["sl_price"]
     t1, t2, t3 = computed["t1"], computed["t2"], computed["t3"]
+    current = computed["current_price"]
+    price_date = computed.get("price_date", "")
     R = round(entry - sl, 2)
+    price_line = f"₹{current}"
+    if price_date:
+        price_line += f" <i>({price_date})</i>"
     return (
         f"⚠️ <b>IPO NEAR BREAKOUT — {sym}</b>\n"
         f"<i>{company}</i>\n\n"
-        f"Obs window closed. Within <b>{pct:.1f}%</b> of 2-week high.\n\n"
-        f"<b>Entry (2WH):</b> ₹{entry}  |  <b>SL:</b> ₹{sl}  (R=₹{R})\n"
+        f"Obs window closed. Within <b>{pct:.1f}%</b> of 2-week high.\n"
+        f"<b>Current:</b> {price_line}  |  <b>Entry (2WH):</b> ₹{entry}\n\n"
+        f"<b>SL:</b> ₹{sl}  (R=₹{R})\n"
         f"<b>T1:</b> ₹{t1}  |  <b>T2:</b> ₹{t2}  |  <b>T3:</b> ₹{t3}\n\n"
         f"👉 Set LIMIT BUY at ₹{entry}\n"
         f"<a href='https://kite.zerodha.com/chart/web/ciq/NSE/{sym}/EQ'>📈 Chart</a>"
@@ -660,15 +675,23 @@ def build_fresh_message(row: dict, computed: dict) -> str:
     entry   = computed["entry_price"]
     sl      = computed["sl_price"]
     t1, t2, t3 = computed["t1"], computed["t2"], computed["t3"]
+    current    = computed["current_price"]
+    price_date = computed.get("price_date", "")
     R  = round(entry - sl, 2)
     rr = round((t3 - entry) / R, 1) if R > 0 else 0
     signal_date = row.get("signal_date") or "today"
     qty  = computed["qty"]
-    cap_line = f"\n<b>Capital:</b> ₹{computed.get('qty', 0) * entry:,.0f}  ({qty} qty)" if qty else ""
+    cap_line = f"\n<b>Capital:</b> ₹{qty * entry:,.0f}  ({qty} qty)" if qty else ""
+    above = current >= entry
+    price_indicator = "✅ above entry" if above else "⚠️ below entry"
+    price_line = f"₹{current} {price_indicator}"
+    if price_date:
+        price_line += f" <i>({price_date})</i>"
     return (
         f"🚨 <b>IPO BREAKOUT FIRED — {sym}</b>\n"
         f"<i>{company}</i>\n\n"
-        f"Close crossed 2-week high on <b>{signal_date}</b>!\n\n"
+        f"Close crossed 2-week high on <b>{signal_date}</b>!\n"
+        f"<b>Current:</b> {price_line}\n\n"
         f"<b>Entry:</b> ₹{entry}  |  <b>SL:</b> ₹{sl}  (R=₹{R})\n"
         f"<b>T1:</b> ₹{t1}  |  <b>T2:</b> ₹{t2}  |  <b>T3:</b> ₹{t3}\n"
         f"<b>R:R</b> = 1:{rr}{cap_line}\n\n"
@@ -696,11 +719,13 @@ def main() -> None:
 
     # Build computed data for every symbol (used for sheet write-back + alerts)
     sheet_data: dict[str, dict] = {}
+    company_map: dict[str, str] = {}
     for row in scanner_rows:
         sym     = row["symbol"]
         bars    = ohlc_data.get(sym, [])
         capital = capital_map.get(sym, 0.0)
-        sheet_data[sym] = build_sheet_row(row, bars, capital)
+        sheet_data[sym]  = build_sheet_row(row, bars, capital)
+        company_map[sym] = row.get("company", sym)
 
     # Send Telegram alerts for status changes
     alerts_sent = 0
@@ -757,8 +782,30 @@ def main() -> None:
     status_lines = ""
     for lbl in priority:
         syms = status_counts.get(lbl, [])
-        if syms:
-            emoji = STATUS_EMOJI.get(lbl, "•")
+        if not syms:
+            continue
+        emoji = STATUS_EMOJI.get(lbl, "•")
+        # Near Breakout and Entry Pending: show name + current price per stock
+        if lbl in ("Near Breakout", "Entry Pending"):
+            status_lines += f"\n{emoji} <b>{lbl}</b>:"
+            for sym in syms:
+                company  = company_map.get(sym, sym)
+                current  = sheet_data[sym].get("current_price", 0)
+                entry_p  = sheet_data[sym].get("entry_price", 0)
+                pdate    = sheet_data[sym].get("price_date", "")
+                date_tag = f" <i>({pdate})</i>" if pdate else ""
+                if lbl == "Near Breakout" and entry_p:
+                    pct_away = round((entry_p - current) / entry_p * 100, 1)
+                    status_lines += (
+                        f"\n  • <b>{sym}</b> ({company})"
+                        f" — ₹{current}{date_tag}  |  {pct_away}% from entry ₹{entry_p}"
+                    )
+                else:
+                    status_lines += (
+                        f"\n  • <b>{sym}</b> ({company})"
+                        f" — ₹{current}{date_tag}  |  entry ₹{entry_p}"
+                    )
+        else:
             status_lines += f"\n{emoji} <b>{lbl}</b>: {', '.join(syms)}"
 
     # Google Sheet URL
