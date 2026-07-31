@@ -160,7 +160,8 @@ def load_ipo_list(csv_url: str) -> tuple[list[dict], dict[str, float]]:
             resp.raise_for_status()
             raw = resp.text
         except Exception as e:
-            print(f"[ERROR] Could not fetch Google Sheet: {e}")
+            status_code = getattr(getattr(e, "response", None), "status_code", "?")
+            print(f"[ERROR] Could not fetch Google Sheet (HTTP {status_code}): {e}")
             sys.exit(1)
 
     reader = csv.DictReader(io.StringIO(raw))
@@ -702,6 +703,11 @@ def build_fresh_message(row: dict, computed: dict) -> str:
 # ── 9. Main ────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    # Startup diagnostics — shows which secrets are present (no values logged)
+    for var in ("GSHEET_CSV_URL", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GSHEET_SERVICE_ACCOUNT_JSON"):
+        present = "✓ set" if os.getenv(var, "").strip() else "✗ MISSING"
+        print(f"[ENV] {var}: {present}")
+
     csv_url = _require_env("GSHEET_CSV_URL")
     state   = load_state()
 
@@ -824,4 +830,11 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import traceback
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        traceback.print_exc()
+        sys.exit(1)
