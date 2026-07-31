@@ -251,7 +251,11 @@ class IPOBreakoutStrategy(BaseStrategy):
                 })
                 continue
 
-            # Obs window complete
+            # Obs window complete — guard against IPOs with no bars in obs window
+            if not obs_bars:
+                results.append(_no_data_row(sym, name, listing_date, days_since, mc_cr))
+                continue
+
             two_week_high = max(b["high"] for b in obs_bars)
             two_week_low  = min(b["low"]  for b in obs_bars)
             R = two_week_high - two_week_low
